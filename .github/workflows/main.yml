@@ -1,4 +1,4 @@
-name: Build Custom Kernel - ProtoClang
+name: Build Custom Kernel - Proton Clang
 
 on:
   workflow_dispatch:
@@ -16,36 +16,36 @@ jobs:
       - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm libarchive-tools
 
-      - name: Download ProtoClang
+      - name: Download Proton Clang
         run: |
           mkdir toolchain
           cd toolchain
-          # Mengambil ProtoClang (versi terbaru atau sesuaikan link)
-          wget https://github.com/mizuno-asuka/ProtoClang/releases/download/20240324/ProtoClang-20240324.tar.gz
-          tar -xf ProtoClang-20240324.tar.gz
+          # Mengunduh Proton Clang terbaru (Branch: master)
+          git clone https://github.com/kdrag0n/proton-clang-build --depth=1 -b master proton-clang
 
       - name: Build Kernel
         run: |
           cd kernel
-          export PATH="${GITHUB_WORKSPACE}/toolchain/bin:$PATH"
           
-          # Variabel Build
+          # Setup Path Toolchain
+          TC_DIR="${GITHUB_WORKSPACE}/toolchain/proton-clang"
+          export PATH="$TC_DIR/bin:$PATH"
+          
+          # Variabel Konfigurasi
           ARCH=arm64
-          SUBARCH=arm64
-          COMPILER_TYPE=clang
-          DEFCONFIG=your_defconfig_file_here # Ganti dengan nama defconfig Anda
+          DEFCONFIG=your_defconfig_file_here # GANTI dengan nama defconfig Anda
           
-          # Penjelasan: LTO biasanya diaktifkan via defconfig (CONFIG_LTO_CLANG_FULL=y)
-          # Namun kita bisa memastikannya lewat argumen make
-          
+          # Pre-make (Bersihkan dan Set Defconfig)
+          make O=out ARCH=$ARCH clean
           make O=out ARCH=$ARCH $DEFCONFIG
           
+          # Proses Build dengan LTO dan Proton Clang
+          # Proton Clang sudah membawa binutils terintegrasi (llvm)
           make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
-              CLANG_TRIPLE=aarch64-linux-gnu- \
               CROSS_COMPILE=aarch64-linux-gnu- \
               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
               LLVM=1 \
@@ -55,10 +55,24 @@ jobs:
               NM=llvm-nm \
               OBJCOPY=llvm-objcopy \
               OBJDUMP=llvm-objdump \
-              STRIP=llvm-strip
+              STRIP=llvm-strip \
+              V=0
+              
+      - name: Check Build Results
+        run: |
+          if [ -f kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
+             echo "Build Berhasil!"
+          elif [ -f kernel/out/arch/arm64/boot/Image ]; then
+             echo "Build Berhasil (Image tanpa DTB)!"
+          else
+             echo "Build Gagal! Cek Log."
+             exit 1
+          fi
 
-      - name: Upload Kernel Image
+      - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Image
-          path: kernel/out/arch/arm64/boot/Image*
+          name: Proton-Kernel-Build
+          path: |
+            kernel/out/arch/arm64/boot/Image*
+            kernel/out/arch/arm64/boot/dtbo.img

@@ -16,33 +16,33 @@ jobs:
       - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm libarchive-tools
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev libarchive-tools
 
       - name: Download Proton Clang
         run: |
-          mkdir toolchain
-          cd toolchain
-          # Mengunduh Proton Clang terbaru (Branch: master)
-          git clone https://github.com/kdrag0n/proton-clang-build --depth=1 -b master proton-clang
+          # Clone prebuilt binary (depth 1 agar cepat)
+          git clone https://github.com/kdrag0n/proton-clang.git --depth=1 toolchain
 
       - name: Build Kernel
         run: |
           cd kernel
           
-          # Setup Path Toolchain
-          TC_DIR="${GITHUB_WORKSPACE}/toolchain/proton-clang"
+          # Setup Toolchain Path
+          TC_DIR="${GITHUB_WORKSPACE}/toolchain"
           export PATH="$TC_DIR/bin:$PATH"
           
           # Variabel Konfigurasi
           ARCH=arm64
-          DEFCONFIG=your_defconfig_file_here # GANTI dengan nama defconfig Anda
+          DEFCONFIG=k65v1_64_bsp_defconfig # GANTI dengan nama file defconfig Anda
           
-          # Pre-make (Bersihkan dan Set Defconfig)
-          make O=out ARCH=$ARCH clean
+          # Bersihkan direktori build
+          mkdir out
+          
+          # Langkah 1: Generate Config
           make O=out ARCH=$ARCH $DEFCONFIG
           
-          # Proses Build dengan LTO dan Proton Clang
-          # Proton Clang sudah membawa binutils terintegrasi (llvm)
+          # Langkah 2: Proses Build
+          # Proton Clang mendukung penggunaan LLVM=1 secara penuh untuk LTO
           make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -55,24 +55,21 @@ jobs:
               NM=llvm-nm \
               OBJCOPY=llvm-objcopy \
               OBJDUMP=llvm-objdump \
-              STRIP=llvm-strip \
-              V=0
-              
-      - name: Check Build Results
+              STRIP=llvm-strip
+
+      - name: Check Results
         run: |
-          if [ -f kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
-             echo "Build Berhasil!"
-          elif [ -f kernel/out/arch/arm64/boot/Image ]; then
-             echo "Build Berhasil (Image tanpa DTB)!"
+          if [ -f kernel/out/arch/arm64/boot/Image ]; then
+             echo "Kernel build successfully!"
           else
-             echo "Build Gagal! Cek Log."
+             echo "Kernel image not found!"
              exit 1
           fi
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Proton-Kernel-Build
+          name: Kernel-Proton-LTO
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img

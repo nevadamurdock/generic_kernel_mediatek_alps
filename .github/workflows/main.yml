@@ -1,4 +1,4 @@
-name: Build Custom Kernel - Proton Clang
+name: Build Custom Kernel - Proton Clang Optimized
 
 on:
   workflow_dispatch:
@@ -16,7 +16,8 @@ jobs:
       - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev libarchive-tools
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev libarchive-tools \
+          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
       - name: Download Proton Clang
         run: |
@@ -27,23 +28,23 @@ jobs:
         run: |
           cd kernel
           
-          # Setup Toolchain Path
-          TC_DIR="${GITHUB_WORKSPACE}/toolchain"
-          export PATH="$TC_DIR/bin:$PATH"
+          # Tentukan Path Toolchain
+          TC_DIR="${GITHUB_WORKSPACE}/toolchain/bin"
           
           # Variabel Konfigurasi
           ARCH=arm64
-          DEFCONFIG=k65v1_64_bsp_defconfig # GANTI dengan nama file defconfig Anda
+          DEFCONFIG=your_defconfig_file_here # <--- GANTI INI (contoh: mt6765_defconfig)
           
-          # Bersihkan direktori build
-          mkdir out
+          # Buat direktori output
+          mkdir -p out
           
-          # Langkah 1: Generate Config
+          # 1. Generate Config menggunakan host compiler sistem
+          # Kita tidak memasukkan TC_DIR ke PATH di sini untuk menghindari error fixdep/libc
           make O=out ARCH=$ARCH $DEFCONFIG
           
-          # Langkah 2: Proses Build
-          # Proton Clang mendukung penggunaan LLVM=1 secara penuh untuk LTO
-          make -j$(nproc --all) O=out \
+          # 2. Proses Build Utama
+          # Kita masukkan TC_DIR ke PATH hanya pada baris perintah make ini saja
+          PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
               CROSS_COMPILE=aarch64-linux-gnu- \
@@ -55,21 +56,27 @@ jobs:
               NM=llvm-nm \
               OBJCOPY=llvm-objcopy \
               OBJDUMP=llvm-objdump \
-              STRIP=llvm-strip
+              STRIP=llvm-strip \
+              HOSTCC=gcc \
+              HOSTCXX=g++ \
+              V=0
 
       - name: Check Results
         run: |
           if [ -f kernel/out/arch/arm64/boot/Image ]; then
              echo "Kernel build successfully!"
+          elif [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
+             echo "Kernel build successfully (Compressed)!"
           else
-             echo "Kernel image not found!"
+             echo "Kernel image not found! Check logs above for errors."
              exit 1
           fi
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Proton-LTO
+          name: Proton-Kernel-LTO
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img
+            kernel/out/arch/arm64/boot/dts/mediatek/*.dtb

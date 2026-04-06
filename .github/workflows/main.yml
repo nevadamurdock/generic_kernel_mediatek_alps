@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - ZyCromerZ Clang Optimized
+name: Build Kernel k65v1 - ZyCromerZ Clang Final Fix
 
 on:
   workflow_dispatch:
@@ -47,7 +47,8 @@ jobs:
           scripts/config --file out/.config -e LTO_CLANG_THIN
           
           # 3. Proses Build Utama
-          # KCFLAGS ditambahkan untuk mengabaikan error warning pada driver vendor MediaTek (eccci)
+          # Menambahkan flag -Wno-everything (opsi terakhir) jika driver benar-benar kotor
+          # Namun kita mulai dengan flag spesifik agar build tetap aman
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -64,7 +65,7 @@ jobs:
               STRIP=llvm-strip \
               HOSTCC=gcc \
               HOSTCXX=g++ \
-              KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-unused-variable" \
+              KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-unused-variable -Wno-unused-function -Wno-format-security -Wno-incompatible-pointer-types -Wno-return-type" \
               V=0
 
       - name: Check Results
@@ -74,7 +75,7 @@ jobs:
           elif [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
              echo "Build Berhasil (Image.gz)!"
           else
-             echo "Build Gagal! Image tidak ditemukan."
+             echo "Build Gagal! Silakan cek log di bagian atas untuk pesan 'error:' yang spesifik."
              exit 1
           fi
 

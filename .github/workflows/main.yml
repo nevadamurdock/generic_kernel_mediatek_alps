@@ -1,4 +1,4 @@
-name: Build Custom Kernel - Proton Clang Optimized
+name: Build Kernel k65v1 - Proton Clang Optimized
 
 on:
   workflow_dispatch:
@@ -21,32 +21,37 @@ jobs:
 
       - name: Download Proton Clang
         run: |
-          # Clone prebuilt binary (depth 1 agar cepat)
+          # Clone Proton Clang (Prebuilt)
           git clone https://github.com/kdrag0n/proton-clang.git --depth=1 toolchain
 
       - name: Build Kernel
         run: |
           cd kernel
           
-          # Tentukan Path Toolchain
-          TC_DIR="${GITHUB_WORKSPACE}/toolchain/bin"
+          # Proton Clang memerlukan PATH ke beberapa folder bin di dalamnya
+          TC_DIR="${GITHUB_WORKSPACE}/toolchain"
+          export PATH="$TC_DIR/bin:$PATH"
           
           # Variabel Konfigurasi
           ARCH=arm64
-          DEFCONFIG=k65v1_64_bsp_defconfig# <--- GANTI INI (contoh: mt6765_defconfig)
+          DEFCONFIG=k65v1_64_bsp_defconfig
           
-          # Buat direktori output
           mkdir -p out
           
-          # 1. Generate Config menggunakan host compiler sistem
-          # Kita tidak memasukkan TC_DIR ke PATH di sini untuk menghindari error fixdep/libc
-          make O=out ARCH=$ARCH $DEFCONFIG
+          # 1. Generate Config
+          # Kita pastikan HOSTCC tetap menggunakan GCC sistem agar tidak error relr.dyn
+          make O=out ARCH=$ARCH $DEFCONFIG HOSTCC=gcc HOSTCXX=g++
           
-          # 2. Proses Build Utama
-          # Kita masukkan TC_DIR ke PATH hanya pada baris perintah make ini saja
-          PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
+          # 2. Paksa Aktifkan ThinLTO (Jika disupport oleh source)
+          scripts/config --file out/.config -e LTO_CLANG_THIN
+          
+          # 3. Proses Build Utama
+          # Proton Clang biasanya bekerja paling stabil dengan wrapper 'clang' 
+          # yang sudah menangani target triplet secara internal.
+          make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
+              CLANG_TRIPLE=aarch64-linux-gnu- \
               CROSS_COMPILE=aarch64-linux-gnu- \
               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
               LLVM=1 \
@@ -64,19 +69,16 @@ jobs:
       - name: Check Results
         run: |
           if [ -f kernel/out/arch/arm64/boot/Image ]; then
-             echo "Kernel build successfully!"
-          elif [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
-             echo "Kernel build successfully (Compressed)!"
+             echo "Build Berhasil!"
           else
-             echo "Kernel image not found! Check logs above for errors."
+             echo "Build Gagal! File Image tidak ditemukan."
              exit 1
           fi
 
-      - name: Upload Kernel Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Proton-Kernel-LTO
+          name: Kernel-k65v1-Proton
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img
-            kernel/out/arch/arm64/boot/dts/mediatek/*.dtb

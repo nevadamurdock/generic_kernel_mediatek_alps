@@ -21,16 +21,15 @@ jobs:
 
       - name: Download Proton Clang
         run: |
-          # Clone Proton Clang (Prebuilt)
+          # Clone prebuilt binary kdrag0n/proton-clang
           git clone https://github.com/kdrag0n/proton-clang.git --depth=1 toolchain
 
       - name: Build Kernel
         run: |
           cd kernel
           
-          # Proton Clang memerlukan PATH ke beberapa folder bin di dalamnya
-          TC_DIR="${GITHUB_WORKSPACE}/toolchain"
-          export PATH="$TC_DIR/bin:$PATH"
+          # Tentukan Path Toolchain
+          TC_DIR="${GITHUB_WORKSPACE}/toolchain/bin"
           
           # Variabel Konfigurasi
           ARCH=arm64
@@ -39,16 +38,16 @@ jobs:
           mkdir -p out
           
           # 1. Generate Config
-          # Kita pastikan HOSTCC tetap menggunakan GCC sistem agar tidak error relr.dyn
-          make O=out ARCH=$ARCH $DEFCONFIG HOSTCC=gcc HOSTCXX=g++
+          # Jangan masukkan TC_DIR ke PATH dulu agar host-tools dibangun pakai GCC sistem
+          make O=out ARCH=$ARCH $DEFCONFIG
           
-          # 2. Paksa Aktifkan ThinLTO (Jika disupport oleh source)
+          # 2. Paksa Aktifkan ThinLTO di .config
           scripts/config --file out/.config -e LTO_CLANG_THIN
           
           # 3. Proses Build Utama
-          # Proton Clang biasanya bekerja paling stabil dengan wrapper 'clang' 
-          # yang sudah menangani target triplet secara internal.
-          make -j$(nproc --all) O=out \
+          # Kita gunakan LD=ld.lld dan memastikan HOSTCC tetap ke /usr/bin/gcc
+          # Masukkan TC_DIR ke PATH hanya di baris ini
+          PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
               CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -62,8 +61,9 @@ jobs:
               OBJCOPY=llvm-objcopy \
               OBJDUMP=llvm-objdump \
               STRIP=llvm-strip \
-              HOSTCC=gcc \
-              HOSTCXX=g++ \
+              HOSTCC=/usr/bin/gcc \
+              HOSTCXX=/usr/bin/g++ \
+              HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu -L/lib/x86_64-linux-gnu" \
               V=0
 
       - name: Check Results
@@ -71,7 +71,7 @@ jobs:
           if [ -f kernel/out/arch/arm64/boot/Image ]; then
              echo "Build Berhasil!"
           else
-             echo "Build Gagal! File Image tidak ditemukan."
+             echo "Build Gagal! Image tidak ditemukan."
              exit 1
           fi
 

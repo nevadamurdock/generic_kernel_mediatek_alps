@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - ZyCromerZ Clang Final Fix
+name: Build Kernel k65v1 - Clang Ultra Tolerant
 
 on:
   workflow_dispatch:
@@ -47,8 +47,9 @@ jobs:
           scripts/config --file out/.config -e LTO_CLANG_THIN
           
           # 3. Proses Build Utama
-          # Menambahkan flag -Wno-everything (opsi terakhir) jika driver benar-benar kotor
-          # Namun kita mulai dengan flag spesifik agar build tetap aman
+          # -w: Matikan SEMUA warnings (Memaksa Clang jadi setoleran GCC)
+          # -fcommon: Izinkan variabel global duplikat (Khas driver MTK)
+          # -fno-builtin: Hindari konflik fungsi internal LLVM
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -65,7 +66,7 @@ jobs:
               STRIP=llvm-strip \
               HOSTCC=gcc \
               HOSTCXX=g++ \
-              KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-unused-variable -Wno-unused-function -Wno-format-security -Wno-incompatible-pointer-types -Wno-return-type" \
+              KCFLAGS="-w -fcommon -fno-builtin" \
               V=0
 
       - name: Check Results
@@ -75,14 +76,14 @@ jobs:
           elif [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
              echo "Build Berhasil (Image.gz)!"
           else
-             echo "Build Gagal! Silakan cek log di bagian atas untuk pesan 'error:' yang spesifik."
+             echo "Build Gagal total. Jika masih error di ECCCI dengan flag -w, berarti ada file source yang hilang."
              exit 1
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-k65v1-ZyCromerZ-ThinLTO
+          name: Kernel-k65v1-Clang-Tolerant
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img

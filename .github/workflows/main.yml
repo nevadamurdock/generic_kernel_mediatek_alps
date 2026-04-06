@@ -33,7 +33,7 @@ jobs:
           
           # Variabel Konfigurasi
           ARCH=arm64
-          DEFCONFIG=your_defconfig_file_here # <--- GANTI INI (contoh: mt6765_defconfig)
+          DEFCONFIG=k65v1_64_bsp_defconfig# <--- GANTI INI (contoh: mt6765_defconfig)
           
           # Buat direktori output
           mkdir -p out

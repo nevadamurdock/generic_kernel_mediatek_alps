@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - Proton Clang Final Fix
+name: Build Kernel k65v1 - ZyCromerZ Clang
 
 on:
   workflow_dispatch:
@@ -19,15 +19,19 @@ jobs:
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev libarchive-tools \
           gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-      - name: Download Proton Clang
+      - name: Download ZyCromerZ Clang
         run: |
-          git clone https://github.com/kdrag0n/proton-clang.git --depth=1 toolchain
+          mkdir toolchain
+          cd toolchain
+          wget https://github.com/ZyCromerZ/Clang/releases/download/12.0.1-20230207-release/Clang-12.0.1-20230207.tar.gz
+          tar -xf Clang-12.0.1-20230207.tar.gz
+          rm Clang-12.0.1-20230207.tar.gz
 
       - name: Build Kernel
         run: |
           cd kernel
           
-          # Lokasi Toolchain
+          # Path ke folder bin toolchain yang baru diekstrak
           TC_DIR="${GITHUB_WORKSPACE}/toolchain/bin"
           
           # Konfigurasi
@@ -36,16 +40,14 @@ jobs:
           
           mkdir -p out
           
-          # 1. Generate Config menggunakan host GCC asli
-          make O=out ARCH=$ARCH $DEFCONFIG HOSTCC=gcc HOSTCXX=g++
+          # 1. Generate Config
+          make O=out ARCH=$ARCH $DEFCONFIG
           
-          # 2. Paksa Aktifkan ThinLTO jika didukung
+          # 2. Aktifkan ThinLTO (Karena ARCH_SUPPORTS_THINLTO terdeteksi)
           scripts/config --file out/.config -e LTO_CLANG_THIN
           
           # 3. Proses Build Utama
-          # Kuncinya ada pada 'LLVM=1' dan tetap mendefinisikan HOSTCC secara eksplisit
-          # Kita tidak memasukkan TC_DIR ke export PATH global, tapi spesifik ke make
-          
+          # Menggunakan LLVM=1 untuk integrasi penuh Clang/LLVM
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -62,8 +64,6 @@ jobs:
               STRIP=llvm-strip \
               HOSTCC=gcc \
               HOSTCXX=g++ \
-              HOSTLD=ld \
-              HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu -L/lib/x86_64-linux-gnu" \
               V=0
 
       - name: Check Results
@@ -71,14 +71,14 @@ jobs:
           if [ -f kernel/out/arch/arm64/boot/Image ]; then
              echo "Build Berhasil!"
           else
-             echo "Build Gagal!"
+             echo "Build Gagal! Image tidak ditemukan."
              exit 1
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-k65v1-Proton-Final
+          name: Kernel-k65v1-ZyCromerZ
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img

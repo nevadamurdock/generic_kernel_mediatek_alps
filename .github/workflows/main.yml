@@ -1,0 +1,64 @@
+name: Build Custom Kernel - ProtoClang
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: nevadamurdock/generic_kernel_mediatek_alps
+          path: kernel
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm
+
+      - name: Download ProtoClang
+        run: |
+          mkdir toolchain
+          cd toolchain
+          # Mengambil ProtoClang (versi terbaru atau sesuaikan link)
+          wget https://github.com/mizuno-asuka/ProtoClang/releases/download/20240324/ProtoClang-20240324.tar.gz
+          tar -xf ProtoClang-20240324.tar.gz
+
+      - name: Build Kernel
+        run: |
+          cd kernel
+          export PATH="${GITHUB_WORKSPACE}/toolchain/bin:$PATH"
+          
+          # Variabel Build
+          ARCH=arm64
+          SUBARCH=arm64
+          COMPILER_TYPE=clang
+          DEFCONFIG=your_defconfig_file_here # Ganti dengan nama defconfig Anda
+          
+          # Penjelasan: LTO biasanya diaktifkan via defconfig (CONFIG_LTO_CLANG_FULL=y)
+          # Namun kita bisa memastikannya lewat argumen make
+          
+          make O=out ARCH=$ARCH $DEFCONFIG
+          
+          make -j$(nproc --all) O=out \
+              ARCH=$ARCH \
+              CC=clang \
+              CLANG_TRIPLE=aarch64-linux-gnu- \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+              LLVM=1 \
+              LLVM_IAS=1 \
+              LD=ld.lld \
+              AR=llvm-ar \
+              NM=llvm-nm \
+              OBJCOPY=llvm-objcopy \
+              OBJDUMP=llvm-objdump \
+              STRIP=llvm-strip
+
+      - name: Upload Kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-Image
+          path: kernel/out/arch/arm64/boot/Image*

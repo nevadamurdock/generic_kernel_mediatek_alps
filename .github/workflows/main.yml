@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - Proton Clang Optimized
+name: Build Kernel k65v1 - Proton Clang Final Fix
 
 on:
   workflow_dispatch:
@@ -21,32 +21,31 @@ jobs:
 
       - name: Download Proton Clang
         run: |
-          # Clone prebuilt binary kdrag0n/proton-clang
           git clone https://github.com/kdrag0n/proton-clang.git --depth=1 toolchain
 
       - name: Build Kernel
         run: |
           cd kernel
           
-          # Tentukan Path Toolchain
+          # Lokasi Toolchain
           TC_DIR="${GITHUB_WORKSPACE}/toolchain/bin"
           
-          # Variabel Konfigurasi
+          # Konfigurasi
           ARCH=arm64
           DEFCONFIG=k65v1_64_bsp_defconfig
           
           mkdir -p out
           
-          # 1. Generate Config
-          # Jangan masukkan TC_DIR ke PATH dulu agar host-tools dibangun pakai GCC sistem
-          make O=out ARCH=$ARCH $DEFCONFIG
+          # 1. Generate Config menggunakan host GCC asli
+          make O=out ARCH=$ARCH $DEFCONFIG HOSTCC=gcc HOSTCXX=g++
           
-          # 2. Paksa Aktifkan ThinLTO di .config
+          # 2. Paksa Aktifkan ThinLTO jika didukung
           scripts/config --file out/.config -e LTO_CLANG_THIN
           
           # 3. Proses Build Utama
-          # Kita gunakan LD=ld.lld dan memastikan HOSTCC tetap ke /usr/bin/gcc
-          # Masukkan TC_DIR ke PATH hanya di baris ini
+          # Kuncinya ada pada 'LLVM=1' dan tetap mendefinisikan HOSTCC secara eksplisit
+          # Kita tidak memasukkan TC_DIR ke export PATH global, tapi spesifik ke make
+          
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -61,8 +60,9 @@ jobs:
               OBJCOPY=llvm-objcopy \
               OBJDUMP=llvm-objdump \
               STRIP=llvm-strip \
-              HOSTCC=/usr/bin/gcc \
-              HOSTCXX=/usr/bin/g++ \
+              HOSTCC=gcc \
+              HOSTCXX=g++ \
+              HOSTLD=ld \
               HOSTLDFLAGS="-L/usr/lib/x86_64-linux-gnu -L/lib/x86_64-linux-gnu" \
               V=0
 
@@ -71,14 +71,14 @@ jobs:
           if [ -f kernel/out/arch/arm64/boot/Image ]; then
              echo "Build Berhasil!"
           else
-             echo "Build Gagal! Image tidak ditemukan."
+             echo "Build Gagal!"
              exit 1
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-k65v1-Proton
+          name: Kernel-k65v1-Proton-Final
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img

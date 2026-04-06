@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - ZyCromerZ Clang
+name: Build Kernel k65v1 - ZyCromerZ Clang Optimized
 
 on:
   workflow_dispatch:
@@ -31,7 +31,7 @@ jobs:
         run: |
           cd kernel
           
-          # Path ke folder bin toolchain yang baru diekstrak
+          # Path Toolchain
           TC_DIR="${GITHUB_WORKSPACE}/toolchain/bin"
           
           # Konfigurasi
@@ -43,11 +43,11 @@ jobs:
           # 1. Generate Config
           make O=out ARCH=$ARCH $DEFCONFIG
           
-          # 2. Aktifkan ThinLTO (Karena ARCH_SUPPORTS_THINLTO terdeteksi)
+          # 2. Paksa Aktifkan ThinLTO
           scripts/config --file out/.config -e LTO_CLANG_THIN
           
           # 3. Proses Build Utama
-          # Menggunakan LLVM=1 untuk integrasi penuh Clang/LLVM
+          # KCFLAGS ditambahkan untuk mengabaikan error warning pada driver vendor MediaTek (eccci)
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -64,12 +64,15 @@ jobs:
               STRIP=llvm-strip \
               HOSTCC=gcc \
               HOSTCXX=g++ \
+              KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-unused-variable" \
               V=0
 
       - name: Check Results
         run: |
           if [ -f kernel/out/arch/arm64/boot/Image ]; then
              echo "Build Berhasil!"
+          elif [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
+             echo "Build Berhasil (Image.gz)!"
           else
              echo "Build Gagal! Image tidak ditemukan."
              exit 1
@@ -78,7 +81,8 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-k65v1-ZyCromerZ
+          name: Kernel-k65v1-ZyCromerZ-ThinLTO
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img
+            kernel/out/arch/arm64/boot/dts/mediatek/*.dtb

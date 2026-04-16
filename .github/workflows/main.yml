@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - ZyCromerZ Clang 17 + KSU Next + SusFS
+name: Build Kernel k65v1 - ZyCromerZ Clang 12 + KSU Next + SusFS
 
 on:
   workflow_dispatch:
@@ -19,18 +19,18 @@ jobs:
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev libarchive-tools \
           gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi curl git patch
 
-      - name: Download ZyCromerZ Clang 17
+      - name: Download ZyCromerZ Clang 12
         run: |
           mkdir toolchain
           cd toolchain
-          wget https://github.com/ZyCromerZ/Clang/releases/download/17.0.3-20231016-release/Clang-17.0.3-20231016.tar.gz
-          tar -xf Clang-17.0.3-20231016.tar.gz
-          rm Clang-17.0.3-20231016.tar.gz
+          # Link pilihan user: Clang 12.0.1
+          wget https://github.com/ZyCromerZ/Clang/releases/download/12.0.1-20230207-release/Clang-12.0.1-20230207.tar.gz
+          tar -xf Clang-12.0.1-20230207.tar.gz
+          rm Clang-12.0.1-20230207.tar.gz
 
       - name: Integrate KernelSU-Next & SusFS
         run: |
           cd kernel
-          
           # 1. Pasang KernelSU-Next Driver (dev-susfs)
           git clone https://github.com/pershoot/KernelSU-Next -b dev-susfs drivers/kernelsu
           
@@ -47,19 +47,17 @@ jobs:
           cp susfs_src/kernel/include/linux/susfs.h include/linux/
           cp susfs_src/kernel/fs/susfs.c fs/
           
-          # Terapkan Patch ke core kernel (VFS, devinfo, dll)
+          # Terapkan Patch ke core kernel
           cp susfs_src/KernelSU/10_enable_susfs_for_ksu.patch .
-          patch -p1 < 10_enable_susfs_for_ksu.patch || echo "Patch KSU gagal, mungkin sudah terintegrasi"
+          patch -p1 < 10_enable_susfs_for_ksu.patch || echo "Patch KSU skip."
           
           # Patch filesystem (SusFS)
-          find susfs_src/kernel/ -name "*.patch" -exec patch -p1 < {} + || echo "Beberapa patch mungkin gagal/skip"
+          find susfs_src/kernel/ -name "*.patch" -exec patch -p1 < {} + || echo "Patch filesystem skip."
 
-      - name: Fix GPU Driver (Compatibility Fix)
+      - name: Fix GPU Driver (Optional for Clang 12)
         run: |
-          # Masuk ke folder driver GPU yang bermasalah
+          # Meskipun Clang 12 lebih toleran, kita tetap jalankan sed ini sebagai langkah preventif
           cd kernel/drivers/gpu/mediatek/gpu_rgx/m1.13ED5776728/services/system/rogue/rgx_mtk/mt6765/
-          
-          # Memperbaiki error 'incompatible integer to pointer conversion' dengan typecasting
           sed -i 's/PVRSRVDevicePreClockSpeedChange(ui32RGXDevIdx/PVRSRVDevicePreClockSpeedChange((void *)(uintptr_t)ui32RGXDevIdx/g' mtk_mfgsys.c
           sed -i 's/PVRSRVGetDevicePowerState(ui32RGXDevIdx/PVRSRVGetDevicePowerState((void *)(uintptr_t)ui32RGXDevIdx/g' mtk_mfgsys.c
           sed -i 's/MTKWriteBackFreqToRGX(ui32RGXDevIdx/MTKWriteBackFreqToRGX((void *)(uintptr_t)ui32RGXDevIdx/g' mtk_mfgsys.c
@@ -69,7 +67,6 @@ jobs:
         run: |
           cd kernel
           
-          # Path Toolchain ZyCromerZ
           TC_DIR="${GITHUB_WORKSPACE}/toolchain/bin"
           ARCH=arm64
           DEFCONFIG=k65v1_64_bsp_defconfig
@@ -88,7 +85,8 @@ jobs:
           scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT
           
           # 3. Proses Build Utama
-          # DTC_FLAGS="-w" untuk membungkam warning device tree yang tidak perlu
+          # Pada Clang 12, LLVM_IAS=1 mungkin perlu dimatikan jika assembler-nya bermasalah,
+          # tapi kita coba aktifkan dulu untuk performa.
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -98,24 +96,22 @@ jobs:
               LLVM=1 \
               LLVM_IAS=1 \
               DTC_FLAGS="-w" \
-              KCFLAGS="-w -fcommon -fno-builtin -Wno-error=int-conversion -Wno-error=incompatible-function-pointer-types" \
+              KCFLAGS="-w -fcommon -fno-builtin" \
               V=0
 
       - name: Check Results
         run: |
-          if [ -f kernel/out/arch/arm64/boot/Image ]; then
+          if [ -f kernel/out/arch/arm64/boot/Image ] || [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
               echo "Build Berhasil!"
-          elif [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
-              echo "Build Berhasil (Image.gz)!"
           else
-              echo "Build Gagal. Silakan periksa log di atas."
+              echo "Build Gagal."
               exit 1
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-k65v1-ZyCromerZ-KSU
+          name: Kernel-k65v1-Clang12-KSU
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img

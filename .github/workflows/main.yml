@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - Clang Ultra Tolerant
+name: Build Kernel k65v1 - Clang 20 + KernelSU Next (SusFS)
 
 on:
   workflow_dispatch:
@@ -17,24 +17,39 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev libarchive-tools \
-          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi curl git
 
-      - name: Download ZyCromerZ Clang
+      - name: Download AOSP Clang 20
         run: |
           mkdir toolchain
           cd toolchain
-          wget https://github.com/ZyCromerZ/Clang/releases/download/12.0.1-20230207-release/Clang-12.0.1-20230207.tar.gz
-          tar -xf Clang-12.0.1-20230207.tar.gz
-          rm Clang-12.0.1-20230207.tar.gz
+          wget https://github.com/moonooen/AOSP20/releases/download/v1.0/clang-r547379-qssi.tar.gz
+          tar -xf clang-r547379-qssi.tar.gz
+          rm clang-r547379-qssi.tar.gz
+
+      - name: Integrate KernelSU-Next
+        run: |
+          cd kernel
+          # Menggunakan curl untuk mengambil script installer KernelSU-Next (cabang dev-susfs)
+          # Ini akan otomatis menambahkan driver ke driver/kernelsu dan memodifikasi Kconfig/Makefile
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s dev-susfs
+          
+          # Catatan: Karena repo pershoot adalah fork, jika setup.sh tiann tidak mendeteksi 
+          # dev-susfs di repo utama, kita gunakan metode manual fetch:
+          git clone https://github.com/pershoot/KernelSU-Next -b dev-susfs KernelSU-Next-Source
+          cp -r KernelSU-Next-Source/kernel drivers/kernelsu
+          
+          # Tambahkan konfigurasi manual ke Kconfig jika belum ada
+          if ! grep -q "CONFIG_KSU" drivers/Kconfig; then
+            echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+            echo 'obj-y += kernelsu/' >> drivers/Makefile
+          fi
 
       - name: Build Kernel
         run: |
           cd kernel
           
-          # Path Toolchain
           TC_DIR="${GITHUB_WORKSPACE}/toolchain/bin"
-          
-          # Konfigurasi
           ARCH=arm64
           DEFCONFIG=k65v1_64_bsp_defconfig
           
@@ -43,13 +58,14 @@ jobs:
           # 1. Generate Config
           make O=out ARCH=$ARCH $DEFCONFIG
           
-          # 2. Paksa Aktifkan ThinLTO
+          # 2. Aktifkan KernelSU & ThinLTO
           scripts/config --file out/.config -e LTO_CLANG_THIN
+          scripts/config --file out/.config -e KSU
+          scripts/config --file out/.config -e KSU_NEXT
+          # Jika ingin mengaktifkan SusFS secara manual (pastikan patch SusFS sudah masuk jika dibutuhkan)
+          scripts/config --file out/.config -e KSU_SUSFS 
           
           # 3. Proses Build Utama
-          # -w: Matikan SEMUA warnings (Memaksa Clang jadi setoleran GCC)
-          # -fcommon: Izinkan variabel global duplikat (Khas driver MTK)
-          # -fno-builtin: Hindari konflik fungsi internal LLVM
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -58,12 +74,6 @@ jobs:
               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
               LLVM=1 \
               LLVM_IAS=1 \
-              LD=ld.lld \
-              AR=llvm-ar \
-              NM=llvm-nm \
-              OBJCOPY=llvm-objcopy \
-              OBJDUMP=llvm-objdump \
-              STRIP=llvm-strip \
               HOSTCC=gcc \
               HOSTCXX=g++ \
               KCFLAGS="-w -fcommon -fno-builtin" \
@@ -72,19 +82,16 @@ jobs:
       - name: Check Results
         run: |
           if [ -f kernel/out/arch/arm64/boot/Image ]; then
-             echo "Build Berhasil!"
-          elif [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
-             echo "Build Berhasil (Image.gz)!"
+              echo "Build Berhasil dengan KernelSU-Next!"
           else
-             echo "Build Gagal total. Jika masih error di ECCCI dengan flag -w, berarti ada file source yang hilang."
-             exit 1
+              echo "Build Gagal. Periksa konflik driver di log."
+              exit 1
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-k65v1-Clang-Tolerant
+          name: Kernel-k65v1-KSU-Next
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img
-            kernel/out/arch/arm64/boot/dts/mediatek/*.dtb

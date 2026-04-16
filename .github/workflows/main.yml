@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - Clang 12 + KSU Next + SusFS Final Fix
+name: Build Kernel k65v1 - Clang 12 + KSU Next + SusFS + GPU Fix (Final)
 
 on:
   workflow_dispatch:
@@ -31,52 +31,50 @@ jobs:
         run: |
           cd kernel
           # 1. Clone KernelSU-Next (dev-susfs)
+          rm -rf drivers/kernelsu
           git clone https://github.com/pershoot/KernelSU-Next -b dev-susfs drivers/kernelsu
           
-          # Tambahkan ke Build System
-          if ! grep -q "CONFIG_KSU" drivers/Kconfig; then
+          # Validasi: Berhenti jika clone gagal
+          if [ ! -f "drivers/kernelsu/Kconfig" ]; then
+            echo "ERROR: KernelSU Kconfig not found! Clone failed."
+            exit 1
+          fi
+          
+          # Tambahkan ke Build System dengan pengamanan grep
+          if ! grep -q "source \"drivers/kernelsu/Kconfig\"" drivers/Kconfig; then
             echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          fi
+          if ! grep -q "obj-y += kernelsu/" drivers/Makefile; then
             echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
 
           # 2. Clone SusFS Source
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs_src
           
-          # Cari lokasi file secara dinamis agar tidak error "No such file"
+          # Cari lokasi file secara dinamis
           SUSFS_H=$(find susfs_src -name susfs.h | head -n 1)
           SUSFS_C=$(find susfs_src -name susfs.c | head -n 1)
           
-          if [ -f "$SUSFS_H" ]; then
-            cp "$SUSFS_H" include/linux/
-            echo "Successfully copied susfs.h"
-          fi
+          [ -f "$SUSFS_H" ] && cp "$SUSFS_H" include/linux/ && echo "Copied susfs.h"
+          [ -f "$SUSFS_C" ] && cp "$SUSFS_C" fs/ && echo "Copied susfs.c"
           
-          if [ -f "$SUSFS_C" ]; then
-            cp "$SUSFS_C" fs/
-            echo "Successfully copied susfs.c"
-          fi
-          
-          # Terapkan patch KSU-Next (Mencari patch yang mengaktifkan SusFS di KSU)
+          # Terapkan patch KSU-Next
           KSU_PATCH=$(find susfs_src -name "*enable_susfs_for_ksu.patch" | head -n 1)
           if [ -n "$KSU_PATCH" ]; then
-            patch -p1 < "$KSU_PATCH" || echo "KSU Patch skip (already applied or incompatible)."
+            patch -p1 < "$KSU_PATCH" || echo "KSU Patch failed, skipping..."
           fi
           
-          # Terapkan patch Filesystem (Mencari semua file .patch di dalam folder kernel-4.19)
-          # Kita filter agar tidak menerapkan patch KSU lagi di langkah ini
-          find susfs_src -name "*.patch" ! -name "*enable_susfs_for_ksu.patch" -exec patch -p1 < {} + || echo "Some FS patches skipped."
+          # Terapkan patch Filesystem (Semua kecuali patch KSU tadi)
+          find susfs_src -name "*.patch" ! -name "*enable_susfs_for_ksu.patch" -exec patch -p1 < {} + || echo "FS patches skipped."
 
-      - name: Fix GPU Driver (Prevention)
+      - name: Fix GPU Driver (Compatibility Fix)
         run: |
-          # Melakukan fix pada driver GPU agar aman dari error type conversion
-          GPU_FILE="kernel/drivers/gpu/mediatek/gpu_rgx/m1.13ED5776728/services/system/rogue/rgx_mtk/mt6765/mtk_mfgsys.c"
-          if [ -f "$GPU_FILE" ]; then
-            sed -i 's/PVRSRVDevicePreClockSpeedChange(ui32RGXDevIdx/PVRSRVDevicePreClockSpeedChange((void *)(uintptr_t)ui32RGXDevIdx/g' "$GPU_FILE"
-            sed -i 's/PVRSRVGetDevicePowerState(ui32RGXDevIdx/PVRSRVGetDevicePowerState((void *)(uintptr_t)ui32RGXDevIdx/g' "$GPU_FILE"
-            sed -i 's/MTKWriteBackFreqToRGX(ui32RGXDevIdx/MTKWriteBackFreqToRGX((void *)(uintptr_t)ui32RGXDevIdx/g' "$GPU_FILE"
-            sed -i 's/PVRSRVDevicePostClockSpeedChange(ui32RGXDevIdx/PVRSRVDevicePostClockSpeedChange((void *)(uintptr_t)ui32RGXDevIdx/g' "$GPU_FILE"
-            echo "GPU driver patched successfully."
-          fi
+          # Cari file mtk_mfgsys.c dimanapun ia berada di folder gpu
+          find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVDevicePreClockSpeedChange(ui32RGXDevIdx/PVRSRVDevicePreClockSpeedChange((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
+          find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVGetDevicePowerState(ui32RGXDevIdx/PVRSRVGetDevicePowerState((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
+          find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/MTKWriteBackFreqToRGX(ui32RGXDevIdx/MTKWriteBackFreqToRGX((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
+          find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVDevicePostClockSpeedChange(ui32RGXDevIdx/PVRSRVDevicePostClockSpeedChange((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
+          echo "GPU driver patched successfully."
 
       - name: Build Kernel
         run: |
@@ -86,9 +84,11 @@ jobs:
           DEFCONFIG=k65v1_64_bsp_defconfig
           
           mkdir -p out
+          
+          # 1. Generate Config
           make O=out ARCH=$ARCH $DEFCONFIG
           
-          # Aktifkan semua fitur
+          # 2. Konfigurasi KSU, SusFS, & LTO
           scripts/config --file out/.config -e LTO_CLANG_THIN
           scripts/config --file out/.config -e KSU
           scripts/config --file out/.config -e KSU_NEXT
@@ -96,6 +96,7 @@ jobs:
           scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT
           scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT
           
+          # 3. Proses Build Utama
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -111,16 +112,16 @@ jobs:
       - name: Check Results
         run: |
           if [ -f kernel/out/arch/arm64/boot/Image ] || [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
-              echo "Build Sukses!"
+              echo "Build Berhasil!"
           else
-              echo "Build Gagal, periksa log build di atas."
+              echo "Build Gagal total. Periksa log kompilasi."
               exit 1
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-k65v1-Clang12-KSU-SusFS
+          name: Kernel-k65v1-Final
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img

@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - Clang 12 + Pershoot KernelSU-Next (Fix Clone)
+name: Build Kernel k65v1 - Clang 12 + Original KernelSU (Legacy)
 
 on:
   workflow_dispatch:
@@ -27,29 +27,18 @@ jobs:
           tar -xf Clang-12.0.1-20230207.tar.gz
           rm Clang-12.0.1-20230207.tar.gz
 
-      - name: Integrate KernelSU-Next (Pershoot)
+      - name: Integrate Original KernelSU (Legacy)
         run: |
           cd kernel
-          rm -rf drivers/kernelsu
+          # Menggunakan script setup resmi untuk integrasi KSU Legacy
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s legacy
           
-          # Logika Retry untuk Clone (Mencoba hingga 3 kali jika gagal)
-          for i in {1..3}; do
-            git clone https://github.com/pershoot/KernelSU-Next -b dev-susfs drivers/kernelsu --depth 1 && break || sleep 5
-          done
-          
-          # Cek manual apakah file ada
-          if [ ! -f "drivers/kernelsu/Kconfig" ]; then
-            echo "ERROR: KernelSU Kconfig tetap tidak ditemukan setelah 3 kali percobaan!"
+          # Verifikasi integrasi
+          if [ ! -d "drivers/kernelsu" ]; then
+            echo "ERROR: Integrasi KernelSU gagal!"
             exit 1
           fi
-          
-          # Tambahkan ke sistem build
-          if ! grep -q "source \"drivers/kernelsu/Kconfig\"" drivers/Kconfig; then
-            echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-          fi
-          if ! grep -q "obj-y += kernelsu/" drivers/Makefile; then
-            echo 'obj-y += kernelsu/' >> drivers/Makefile
-          fi
+          echo "KernelSU Original berhasil diintegrasikan."
 
       - name: Fix GPU Driver (Compatibility Fix)
         run: |
@@ -65,16 +54,21 @@ jobs:
           ARCH=arm64
           DEFCONFIG=k65v1_64_bsp_defconfig
           
-          # Clean build history
+          # Hapus history build sebelumnya agar bersih
           rm -rf out
           mkdir -p out
           
+          # 1. Generate Config
           make O=out ARCH=$ARCH $DEFCONFIG
           
+          # 2. Tambahkan Konfigurasi KSU & KPROBES
           scripts/config --file out/.config -e LTO_CLANG_THIN
+          scripts/config --file out/.config -e KPROBES
+          scripts/config --file out/.config -e KPROBE_EVENTS
+          scripts/config --file out/.config -e KSU_KPROBE_HOOKS
           scripts/config --file out/.config -e KSU
-          scripts/config --file out/.config -e KSU_NEXT
           
+          # 3. Proses Build Utama
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -90,16 +84,16 @@ jobs:
       - name: Check Results
         run: |
           if [ -f kernel/out/arch/arm64/boot/Image ] || [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
-              echo "Build Sukses!"
+              echo "Build Berhasil dengan KernelSU Original!"
           else
-              echo "Build Gagal."
+              echo "Build Gagal. Cek log untuk error spesifik."
               exit 1
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-k65v1-Fix-Clone
+          name: Kernel-k65v1-KSU-Original
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img

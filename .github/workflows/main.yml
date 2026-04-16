@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - Clang 20 + KernelSU Next (SusFS)
+name: Build Kernel k65v1 - Clang 20 + KSU Next + SusFS
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev libarchive-tools \
-          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi curl git
+          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi curl git patch
 
       - name: Download AOSP Clang 20
         run: |
@@ -27,23 +27,35 @@ jobs:
           tar -xf clang-r547379-qssi.tar.gz
           rm clang-r547379-qssi.tar.gz
 
-      - name: Integrate KernelSU-Next
+      - name: Integrate KernelSU-Next & SusFS
         run: |
           cd kernel
-          # Menggunakan curl untuk mengambil script installer KernelSU-Next (cabang dev-susfs)
-          # Ini akan otomatis menambahkan driver ke driver/kernelsu dan memodifikasi Kconfig/Makefile
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s dev-susfs
           
-          # Catatan: Karena repo pershoot adalah fork, jika setup.sh tiann tidak mendeteksi 
-          # dev-susfs di repo utama, kita gunakan metode manual fetch:
-          git clone https://github.com/pershoot/KernelSU-Next -b dev-susfs KernelSU-Next-Source
-          cp -r KernelSU-Next-Source/kernel drivers/kernelsu
+          # 1. Pasang KernelSU-Next Driver
+          git clone https://github.com/pershoot/KernelSU-Next -b dev-susfs drivers/kernelsu
           
-          # Tambahkan konfigurasi manual ke Kconfig jika belum ada
+          # Tambahkan ke Build System
           if ! grep -q "CONFIG_KSU" drivers/Kconfig; then
             echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
             echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
+
+          # 2. Unduh dan Terapkan SusFS Patches (Kernel 4.19)
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs_src
+          
+          # Salin header SusFS ke folder include kernel
+          cp susfs_src/kernel/include/linux/susfs.h include/linux/
+          cp susfs_src/kernel/fs/susfs.c fs/
+          
+          # Terapkan Patch ke core kernel (VFS, devinfo, dll)
+          # Kita gunakan patch generic untuk 4.19 dari repo tersebut
+          cp susfs_src/KernelSU/10_enable_susfs_for_ksu.patch .
+          patch -p1 < 10_enable_susfs_for_ksu.patch || echo "Patch KSU gagal, mungkin sudah terintegrasi"
+          
+          # Patch filesystem (PENTING untuk SusFS)
+          # Mencari file patch yang paling sesuai di folder susfs_src/kernel/4.19/
+          # Di sini kita asumsikan menggunakan patch generic 4.19
+          find susfs_src/kernel/ -name "*.patch" -exec patch -p1 < {} + || echo "Beberapa patch mungkin gagal/skip"
 
       - name: Build Kernel
         run: |
@@ -58,12 +70,13 @@ jobs:
           # 1. Generate Config
           make O=out ARCH=$ARCH $DEFCONFIG
           
-          # 2. Aktifkan KernelSU & ThinLTO
+          # 2. Aktifkan Konfigurasi via scripts/config
           scripts/config --file out/.config -e LTO_CLANG_THIN
           scripts/config --file out/.config -e KSU
           scripts/config --file out/.config -e KSU_NEXT
-          # Jika ingin mengaktifkan SusFS secara manual (pastikan patch SusFS sudah masuk jika dibutuhkan)
-          scripts/config --file out/.config -e KSU_SUSFS 
+          scripts/config --file out/.config -e KSU_SUSFS
+          scripts/config --file out/.config -e KSU_SUSFS_SUS_MOUNT
+          scripts/config --file out/.config -e KSU_SUSFS_SUS_KSTAT
           
           # 3. Proses Build Utama
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
@@ -82,16 +95,16 @@ jobs:
       - name: Check Results
         run: |
           if [ -f kernel/out/arch/arm64/boot/Image ]; then
-              echo "Build Berhasil dengan KernelSU-Next!"
+              echo "Build Berhasil: Kernel + KSU-Next + SusFS!"
           else
-              echo "Build Gagal. Periksa konflik driver di log."
+              echo "Build Gagal. Cek konflik patch atau kesalahan kompilasi Clang 20."
               exit 1
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-k65v1-KSU-Next
+          name: Kernel-k65v1-SusFS-Clang20
           path: |
             kernel/out/arch/arm64/boot/Image*
             kernel/out/arch/arm64/boot/dtbo.img

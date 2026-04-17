@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - ReSukiSU + Clang 12 (Final Atomic Fix)
+name: Build Kernel k65v1 - ReSukiSU + Clang 12 (Manual Clean Fix)
 
 on:
   workflow_dispatch:
@@ -45,27 +45,28 @@ jobs:
           ARCH=arm64
           DEFCONFIG=k65v1_64_bsp_defconfig
           
-          # --- PERBAIKAN PEMBERSIHAN ---
-          # Menghapus sisa config di root agar tidak muncul pesan "is not clean"
-          make ARCH=$ARCH clean
-          rm -rf out .config
+          # --- MANUAL CLEANING (ANTI ERROR 2) ---
+          # Kita tidak pakai 'make clean' karena Makefile Mediatek rusak.
+          # Kita hapus manual saja file-file yang bikin bentrok 'O=out'
+          echo "Performing manual clean to avoid Makefile errors..."
+          rm -rf out
+          rm -f .config
+          rm -f include/config/kernel.release
+          find . -name "*.o" -type f -delete 2>/dev/null || true
           mkdir -p out
           
           # 1. Generate Config
           make O=out ARCH=$ARCH $DEFCONFIG
           
-          # 2. KONFIGURASI PAKSA
-          # Mematikan LSE secara total agar tidak memanggil atomic_lse.h
+          # 2. KONFIGURASI PAKSA (FIX ATOMIC LSE)
           scripts/config --file out/.config -d ARM64_LSE
           scripts/config --file out/.config -e LTO_CLANG_THIN
           scripts/config --file out/.config -e KPROBES
           scripts/config --file out/.config -e KPROBE_EVENTS
           scripts/config --file out/.config -e KSU
           
-          # 3. EKSEKUSI BUILD DENGAN FIX REGISTER
-          # Menambahkan -D__ASSEMBLY__ bukan solusi, tapi memastikan target triple benar.
-          # Menghapus LLVM_IAS=1 jika error berlanjut sering membantu pada kernel lama, 
-          # tapi kita coba optimasi flag dulu.
+          # 3. EKSEKUSI BUILD
+          # Pakai -DCONFIG_AS_LSE=0 untuk bungkam error register w0
           make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -76,7 +77,7 @@ jobs:
               LLVM_IAS=1 \
               KCFLAGS="-w -fcommon -fno-builtin -Wno-return-type --target=aarch64-linux-gnu -DCONFIG_AS_LSE=0" \
               V=0 || \
-          (echo "BUILD GAGAL! Mencoba build ulang tanpa Integrated Assembler..." && \
+          (echo "BUILD GAGAL! Mencoba build ulang dengan GCC Assembler..." && \
            make -j$(nproc --all) O=out ARCH=$ARCH CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=0 KCFLAGS="-w -fcommon --target=aarch64-linux-gnu -DCONFIG_AS_LSE=0")
 
       - name: Package with AnyKernel3

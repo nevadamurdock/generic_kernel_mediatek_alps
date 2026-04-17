@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - ReSukiSU + AnyKernel3 (Fix Clean Error)
+name: Build Kernel k65v1 - ReSukiSU + Clang 12 (Fix Atomic LSE)
 
 on:
   workflow_dispatch:
@@ -36,21 +36,16 @@ jobs:
             echo "ERROR: Integrasi ReSukiSU Gagal!"
             exit 1
           fi
-          
-          # Force link ke Makefile dan Kconfig
-          if ! grep -q "obj-y += kernelsu/" drivers/Makefile; then
-            echo 'obj-y += kernelsu/' >> drivers/Makefile
-          fi
-          if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
-             echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-          fi
 
-      - name: Fix GPU Driver (Compatibility Fix)
+      - name: Fix GPU Driver & Atomic LSE
         run: |
+          # 1. GPU Fix (seperti sebelumnya)
           find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVDevicePreClockSpeedChange(ui32RGXDevIdx/PVRSRVDevicePreClockSpeedChange((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
           find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVGetDevicePowerState(ui32RGXDevIdx/PVRSRVGetDevicePowerState((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
-          find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/MTKWriteBackFreqToRGX(ui32RGXDevIdx/MTKWriteBackFreqToRGX((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
-          find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVDevicePostClockSpeedChange(ui32RGXDevIdx/PVRSRVDevicePostClockSpeedChange((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
+          
+          # 2. Fix Atomic LSE (Mencegah error unknown register w0)
+          # Kita paksa matikan CONFIG_ARM64_LSE jika menyebabkan error compile
+          # Cara paling aman adalah lewat scripts/config nanti di tahap build
 
       - name: Build Kernel
         run: |
@@ -59,21 +54,22 @@ jobs:
           ARCH=arm64
           DEFCONFIG=k65v1_64_bsp_defconfig
           
-          # --- GANTI MRPROPER DENGAN PENGHAPUSAN OUT SAJA ---
-          echo "Cleaning out folder..."
           rm -rf out
           mkdir -p out
           
-          # 1. Generate Config
           PATH="$TC_DIR:$PATH" make O=out ARCH=$ARCH $DEFCONFIG
           
-          # 2. Konfigurasi ReSukiSU & KPROBES
+          # KONFIGURASI KRUSIAL
           scripts/config --file out/.config -e LTO_CLANG_THIN
           scripts/config --file out/.config -e KPROBES
           scripts/config --file out/.config -e KPROBE_EVENTS
           scripts/config --file out/.config -e KSU
           
-          # 3. Proses Build Utama
+          # DISABLE LSE jika error berlanjut (Sering bermasalah di MTK 4.19)
+          scripts/config --file out/.config -d ARM64_LSE
+          
+          # EKSEKUSI BUILD
+          # Menambahkan --target=aarch64-linux-gnu untuk memastikan Clang tahu ini ARM64
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -82,10 +78,9 @@ jobs:
               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
               LLVM=1 \
               LLVM_IAS=1 \
-              DTC_FLAGS="-w" \
-              KCFLAGS="-w -fcommon -fno-builtin -Wno-return-type -Wno-implicit-function-declaration" \
+              KCFLAGS="-w -fcommon -fno-builtin -Wno-return-type -Wno-implicit-function-declaration --target=aarch64-linux-gnu" \
               V=0 || \
-          (echo "BUILD GAGAL! Menjalankan Verbose Build untuk detail error..." && \
+          (echo "BUILD GAGAL! Menjalankan Verbose Build..." && \
            PATH="$TC_DIR:$PATH" make -j1 O=out ARCH=$ARCH CC=clang LLVM=1 LLVM_IAS=1 V=1)
 
       - name: Package with AnyKernel3
@@ -93,24 +88,16 @@ jobs:
         run: |
           git clone https://github.com/osm0sis/AnyKernel3 AnyKernel3
           rm -rf AnyKernel3/.git
-          
-          if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
-            cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
-          elif [ -f kernel/out/arch/arm64/boot/Image ]; then
-            cp kernel/out/arch/arm64/boot/Image AnyKernel3/Image
-          fi
-          
+          [ -f kernel/out/arch/arm64/boot/Image.gz ] && cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
+          [ -f kernel/out/arch/arm64/boot/Image ] && cp kernel/out/arch/arm64/boot/Image AnyKernel3/Image
           [ -f kernel/out/arch/arm64/boot/dtbo.img ] && cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/
-          
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's|block=/dev/block/tdrex; |block=/dev/block/platform/bootdevice/by-name/boot; |g' AnyKernel3/anykernel.sh
-          
-          cd AnyKernel3
-          zip -r9 ../GusKernel-ReSukiSU-k65v1.zip *
+          cd AnyKernel3 && zip -r9 ../GusKernel-FixLSE-k65v1.zip *
 
       - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: GusKernel-Package
-          path: GusKernel-ReSukiSU-k65v1.zip
+          path: GusKernel-FixLSE-k65v1.zip

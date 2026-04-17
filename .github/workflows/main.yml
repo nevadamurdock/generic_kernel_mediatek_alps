@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - ReSukiSU + Clang 12 (Fix Atomic LSE)
+name: Build Kernel k65v1 - ReSukiSU + Clang 12 (Final Atomic Fix)
 
 on:
   workflow_dispatch:
@@ -37,40 +37,36 @@ jobs:
             exit 1
           fi
 
-      - name: Fix GPU Driver & Atomic LSE
-        run: |
-          # 1. GPU Fix (seperti sebelumnya)
-          find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVDevicePreClockSpeedChange(ui32RGXDevIdx/PVRSRVDevicePreClockSpeedChange((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
-          find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVGetDevicePowerState(ui32RGXDevIdx/PVRSRVGetDevicePowerState((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
-          
-          # 2. Fix Atomic LSE (Mencegah error unknown register w0)
-          # Kita paksa matikan CONFIG_ARM64_LSE jika menyebabkan error compile
-          # Cara paling aman adalah lewat scripts/config nanti di tahap build
-
       - name: Build Kernel
         run: |
           cd kernel
           TC_DIR="${GITHUB_WORKSPACE}/toolchain/bin"
+          PATH="$TC_DIR:$PATH"
           ARCH=arm64
           DEFCONFIG=k65v1_64_bsp_defconfig
           
-          rm -rf out
+          # --- PERBAIKAN PEMBERSIHAN ---
+          # Menghapus sisa config di root agar tidak muncul pesan "is not clean"
+          make ARCH=$ARCH clean
+          rm -rf out .config
           mkdir -p out
           
-          PATH="$TC_DIR:$PATH" make O=out ARCH=$ARCH $DEFCONFIG
+          # 1. Generate Config
+          make O=out ARCH=$ARCH $DEFCONFIG
           
-          # KONFIGURASI KRUSIAL
+          # 2. KONFIGURASI PAKSA
+          # Mematikan LSE secara total agar tidak memanggil atomic_lse.h
+          scripts/config --file out/.config -d ARM64_LSE
           scripts/config --file out/.config -e LTO_CLANG_THIN
           scripts/config --file out/.config -e KPROBES
           scripts/config --file out/.config -e KPROBE_EVENTS
           scripts/config --file out/.config -e KSU
           
-          # DISABLE LSE jika error berlanjut (Sering bermasalah di MTK 4.19)
-          scripts/config --file out/.config -d ARM64_LSE
-          
-          # EKSEKUSI BUILD
-          # Menambahkan --target=aarch64-linux-gnu untuk memastikan Clang tahu ini ARM64
-          PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
+          # 3. EKSEKUSI BUILD DENGAN FIX REGISTER
+          # Menambahkan -D__ASSEMBLY__ bukan solusi, tapi memastikan target triple benar.
+          # Menghapus LLVM_IAS=1 jika error berlanjut sering membantu pada kernel lama, 
+          # tapi kita coba optimasi flag dulu.
+          make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
               CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -78,10 +74,10 @@ jobs:
               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
               LLVM=1 \
               LLVM_IAS=1 \
-              KCFLAGS="-w -fcommon -fno-builtin -Wno-return-type -Wno-implicit-function-declaration --target=aarch64-linux-gnu" \
+              KCFLAGS="-w -fcommon -fno-builtin -Wno-return-type --target=aarch64-linux-gnu -DCONFIG_AS_LSE=0" \
               V=0 || \
-          (echo "BUILD GAGAL! Menjalankan Verbose Build..." && \
-           PATH="$TC_DIR:$PATH" make -j1 O=out ARCH=$ARCH CC=clang LLVM=1 LLVM_IAS=1 V=1)
+          (echo "BUILD GAGAL! Mencoba build ulang tanpa Integrated Assembler..." && \
+           make -j$(nproc --all) O=out ARCH=$ARCH CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=0 KCFLAGS="-w -fcommon --target=aarch64-linux-gnu -DCONFIG_AS_LSE=0")
 
       - name: Package with AnyKernel3
         if: success()
@@ -93,11 +89,11 @@ jobs:
           [ -f kernel/out/arch/arm64/boot/dtbo.img ] && cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's|block=/dev/block/tdrex; |block=/dev/block/platform/bootdevice/by-name/boot; |g' AnyKernel3/anykernel.sh
-          cd AnyKernel3 && zip -r9 ../GusKernel-FixLSE-k65v1.zip *
+          cd AnyKernel3 && zip -r9 ../GusKernel-Final-k65v1.zip *
 
       - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: GusKernel-Package
-          path: GusKernel-FixLSE-k65v1.zip
+          path: GusKernel-Final-k65v1.zip

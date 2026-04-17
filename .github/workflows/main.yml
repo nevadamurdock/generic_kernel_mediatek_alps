@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - Clang 12 + ReSukiSU + AnyKernel3
+name: Build Kernel k65v1 - ReSukiSU + AnyKernel3 (Full Clean)
 
 on:
   workflow_dispatch:
@@ -30,23 +30,25 @@ jobs:
       - name: Integrate ReSukiSU
         run: |
           cd kernel
-          # Menggunakan script setup ReSukiSU sesuai permintaan
+          # Menggunakan script setup ReSukiSU
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
           
-          # Verifikasi folder drivers/kernelsu
           if [ ! -d "drivers/kernelsu" ]; then
             echo "ERROR: Integrasi ReSukiSU Gagal!"
             exit 1
           fi
           
-          # Force link ke Makefile jika script setup tidak melakukannya otomatis
+          # Force link ke Makefile dan Kconfig jika belum ada
           if ! grep -q "obj-y += kernelsu/" drivers/Makefile; then
             echo 'obj-y += kernelsu/' >> drivers/Makefile
+          fi
+          if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
+             echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           fi
 
       - name: Fix GPU Driver (Compatibility Fix)
         run: |
-          # Perbaikan otomatis driver GPU Mediatek agar build tidak terhenti
+          # Perbaikan otomatis driver GPU Mediatek untuk Clang 12
           find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVDevicePreClockSpeedChange(ui32RGXDevIdx/PVRSRVDevicePreClockSpeedChange((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
           find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVGetDevicePowerState(ui32RGXDevIdx/PVRSRVGetDevicePowerState((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
           find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/MTKWriteBackFreqToRGX(ui32RGXDevIdx/MTKWriteBackFreqToRGX((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
@@ -59,7 +61,9 @@ jobs:
           ARCH=arm64
           DEFCONFIG=k65v1_64_bsp_defconfig
           
-          # --- CLEAN BUILD: Hapus folder out sebelumnya ---
+          # --- PEMBERSIHAN TOTAL (MRPROPER) ---
+          echo "Menjalankan mrproper dan membersihkan folder out..."
+          make ARCH=$ARCH mrproper
           rm -rf out
           mkdir -p out
           
@@ -67,7 +71,6 @@ jobs:
           PATH="$TC_DIR:$PATH" make O=out ARCH=$ARCH $DEFCONFIG
           
           # 2. Konfigurasi ReSukiSU & KPROBES
-          # ReSukiSU biasanya menggunakan config dasar yang sama dengan KSU
           scripts/config --file out/.config -e LTO_CLANG_THIN
           scripts/config --file out/.config -e KPROBES
           scripts/config --file out/.config -e KPROBE_EVENTS
@@ -94,7 +97,7 @@ jobs:
           git clone https://github.com/osm0sis/AnyKernel3 AnyKernel3
           rm -rf AnyKernel3/.git
           
-          # Ambil hasil build kernel
+          # Ambil hasil build kernel (Image.gz atau Image)
           if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
             cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
           elif [ -f kernel/out/arch/arm64/boot/Image ]; then
@@ -104,16 +107,16 @@ jobs:
           # Ambil DTBO jika ada
           [ -f kernel/out/arch/arm64/boot/dtbo.img ] && cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/
           
-          # Konfigurasi anykernel.sh untuk MTK 4.19
+          # Konfigurasi anykernel.sh otomatis untuk MTK 4.19
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's|block=/dev/block/tdrex; |block=/dev/block/platform/bootdevice/by-name/boot; |g' AnyKernel3/anykernel.sh
           
           cd AnyKernel3
-          zip -r9 ../GusKernel-ReSukiSU-k65v1.zip *
+          zip -r9 ../GusKernel-ReSukiSU-k65v1-Clean.zip *
 
       - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: GusKernel-Package
-          path: GusKernel-ReSukiSU-k65v1.zip
+          name: GusKernel-Clean-Package
+          path: GusKernel-ReSukiSU-k65v1-Clean.zip

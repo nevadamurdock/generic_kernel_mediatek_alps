@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - ReSukiSU + Clang 12 (Manual Clean Fix)
+name: Build Kernel k65v1 - ReSukiSU + SusFS + AnyKernel3
 
 on:
   workflow_dispatch:
@@ -31,11 +31,32 @@ jobs:
         run: |
           cd kernel
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-          
           if [ ! -d "drivers/kernelsu" ]; then
             echo "ERROR: Integrasi ReSukiSU Gagal!"
             exit 1
           fi
+
+      - name: Integrate SusFS 4.19
+        run: |
+          # 1. Clone SusFS Repository (Branch 4.19)
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 susfs
+          
+          KERNEL_ROOT=${GITHUB_WORKSPACE}/kernel
+          SUSFS_ROOT=${GITHUB_WORKSPACE}/susfs
+          
+          # 2. Salin file pendukung SusFS ke direktori kernel
+          cp $SUSFS_ROOT/kernel_patches/fs/* $KERNEL_ROOT/fs/
+          cp $SUSFS_ROOT/kernel_patches/include/linux/* $KERNEL_ROOT/include/linux/
+          
+          # 3. Patch KernelSU untuk mendukung SusFS
+          cp $SUSFS_ROOT/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch $KERNEL_ROOT/drivers/kernelsu/
+          cd $KERNEL_ROOT/drivers/kernelsu
+          patch -p1 < 10_enable_susfs_for_ksu.patch
+          
+          # 4. Patch Kernel Utama
+          cd $KERNEL_ROOT
+          cp $SUSFS_ROOT/kernel_patches/50_add_susfs_in_kernel-4.19.patch $KERNEL_ROOT/
+          patch -p1 < 50_add_susfs_in_kernel-4.19.patch
 
       - name: Build Kernel
         run: |
@@ -45,28 +66,23 @@ jobs:
           ARCH=arm64
           DEFCONFIG=k65v1_64_bsp_defconfig
           
-          # --- MANUAL CLEANING (ANTI ERROR 2) ---
-          # Kita tidak pakai 'make clean' karena Makefile Mediatek rusak.
-          # Kita hapus manual saja file-file yang bikin bentrok 'O=out'
-          echo "Performing manual clean to avoid Makefile errors..."
+          # Manual Clean (Anti Error 2)
           rm -rf out
           rm -f .config
-          rm -f include/config/kernel.release
-          find . -name "*.o" -type f -delete 2>/dev/null || true
           mkdir -p out
           
-          # 1. Generate Config
           make O=out ARCH=$ARCH $DEFCONFIG
           
-          # 2. KONFIGURASI PAKSA (FIX ATOMIC LSE)
+          # KONFIGURASI PAKSA: KSU + SusFS + Fix LSE
           scripts/config --file out/.config -d ARM64_LSE
           scripts/config --file out/.config -e LTO_CLANG_THIN
           scripts/config --file out/.config -e KPROBES
           scripts/config --file out/.config -e KPROBE_EVENTS
           scripts/config --file out/.config -e KSU
+          scripts/config --file out/.config -e SUSFS
+          scripts/config --file out/.config -e SUSFS_ROOT_HASH_CHECK
           
-          # 3. EKSEKUSI BUILD
-          # Pakai -DCONFIG_AS_LSE=0 untuk bungkam error register w0
+          # EKSEKUSI BUILD
           make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -77,8 +93,8 @@ jobs:
               LLVM_IAS=1 \
               KCFLAGS="-w -fcommon -fno-builtin -Wno-return-type --target=aarch64-linux-gnu -DCONFIG_AS_LSE=0" \
               V=0 || \
-          (echo "BUILD GAGAL! Mencoba build ulang dengan GCC Assembler..." && \
-           make -j$(nproc --all) O=out ARCH=$ARCH CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=0 KCFLAGS="-w -fcommon --target=aarch64-linux-gnu -DCONFIG_AS_LSE=0")
+          (echo "BUILD GAGAL! Fallback ke GCC Assembler..." && \
+           make -j$(nproc --all) O=out ARCH=$ARCH CC=clang LLVM=1 LLVM_IAS=0 KCFLAGS="-w -fcommon --target=aarch64-linux-gnu -DCONFIG_AS_LSE=0")
 
       - name: Package with AnyKernel3
         if: success()
@@ -90,11 +106,11 @@ jobs:
           [ -f kernel/out/arch/arm64/boot/dtbo.img ] && cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's|block=/dev/block/tdrex; |block=/dev/block/platform/bootdevice/by-name/boot; |g' AnyKernel3/anykernel.sh
-          cd AnyKernel3 && zip -r9 ../GusKernel-Final-k65v1.zip *
+          cd AnyKernel3 && zip -r9 ../GusKernel-ReSukiSU-SusFS-k65v1.zip *
 
       - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: GusKernel-Package
-          path: GusKernel-Final-k65v1.zip
+          path: GusKernel-ReSukiSU-SusFS-k65v1.zip

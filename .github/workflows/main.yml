@@ -1,4 +1,4 @@
-name: Build Kernel k65v1 - Final Stable (KSU + AnyKernel3)
+name: Build Kernel k65v1 - Clang 12 + ReSukiSU + AnyKernel3
 
 on:
   workflow_dispatch:
@@ -27,25 +27,26 @@ jobs:
           tar -xf Clang-12.0.1-20230207.tar.gz
           rm Clang-12.0.1-20230207.tar.gz
 
-      - name: Integrate Original KernelSU (Legacy)
+      - name: Integrate ReSukiSU
         run: |
           cd kernel
-          # Gunakan setup.sh resmi
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s legacy
+          # Menggunakan script setup ReSukiSU sesuai permintaan
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
           
-          # Force link ke Makefile jika belum ada
-          if ! grep -q "obj-y += kernelsu/" drivers/Makefile; then
-            echo 'obj-y += kernelsu/' >> drivers/Makefile
+          # Verifikasi folder drivers/kernelsu
+          if [ ! -d "drivers/kernelsu" ]; then
+            echo "ERROR: Integrasi ReSukiSU Gagal!"
+            exit 1
           fi
           
-          if [ ! -d "drivers/kernelsu" ]; then
-            echo "ERROR: Integrasi KernelSU Gagal!"
-            exit 1
+          # Force link ke Makefile jika script setup tidak melakukannya otomatis
+          if ! grep -q "obj-y += kernelsu/" drivers/Makefile; then
+            echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
 
       - name: Fix GPU Driver (Compatibility Fix)
         run: |
-          # Mengatasi strict type checking pada Clang 12 untuk driver MTK
+          # Perbaikan otomatis driver GPU Mediatek agar build tidak terhenti
           find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVDevicePreClockSpeedChange(ui32RGXDevIdx/PVRSRVDevicePreClockSpeedChange((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
           find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/PVRSRVGetDevicePowerState(ui32RGXDevIdx/PVRSRVGetDevicePowerState((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
           find kernel/drivers/gpu/mediatek -name "mtk_mfgsys.c" -exec sed -i 's/MTKWriteBackFreqToRGX(ui32RGXDevIdx/MTKWriteBackFreqToRGX((void *)(uintptr_t)ui32RGXDevIdx/g' {} +
@@ -58,21 +59,21 @@ jobs:
           ARCH=arm64
           DEFCONFIG=k65v1_64_bsp_defconfig
           
-          # Clean build history
+          # --- CLEAN BUILD: Hapus folder out sebelumnya ---
           rm -rf out
           mkdir -p out
           
           # 1. Generate Config
           PATH="$TC_DIR:$PATH" make O=out ARCH=$ARCH $DEFCONFIG
           
-          # 2. Konfigurasi KSU & KPROBES
+          # 2. Konfigurasi ReSukiSU & KPROBES
+          # ReSukiSU biasanya menggunakan config dasar yang sama dengan KSU
           scripts/config --file out/.config -e LTO_CLANG_THIN
           scripts/config --file out/.config -e KPROBES
           scripts/config --file out/.config -e KPROBE_EVENTS
-          scripts/config --file out/.config -e KSU_KPROBE_HOOKS
           scripts/config --file out/.config -e KSU
           
-          # 3. Proses Build Utama dengan Error Catcher
+          # 3. Proses Build Utama
           PATH="$TC_DIR:$PATH" make -j$(nproc --all) O=out \
               ARCH=$ARCH \
               CC=clang \
@@ -84,8 +85,7 @@ jobs:
               DTC_FLAGS="-w" \
               KCFLAGS="-w -fcommon -fno-builtin -Wno-return-type -Wno-implicit-function-declaration" \
               V=0 || \
-          (echo "-----------------------------------------------------" && \
-           echo "BUILD GAGAL! Menjalankan ulang dengan V=1 untuk melihat detail error..." && \
+          (echo "BUILD GAGAL! Menjalankan Verbose Build untuk detail error..." && \
            PATH="$TC_DIR:$PATH" make -j1 O=out ARCH=$ARCH CC=clang LLVM=1 LLVM_IAS=1 V=1)
 
       - name: Package with AnyKernel3
@@ -94,27 +94,26 @@ jobs:
           git clone https://github.com/osm0sis/AnyKernel3 AnyKernel3
           rm -rf AnyKernel3/.git
           
-          # Cek hasil Image
+          # Ambil hasil build kernel
           if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
             cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
           elif [ -f kernel/out/arch/arm64/boot/Image ]; then
             cp kernel/out/arch/arm64/boot/Image AnyKernel3/Image
           fi
           
-          # Salin DTBO & DTB jika ada
+          # Ambil DTBO jika ada
           [ -f kernel/out/arch/arm64/boot/dtbo.img ] && cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/
-          find kernel/out/arch/arm64/boot/dts/mediatek/ -name "*.dtb" -exec cp {} AnyKernel3/ \; 2>/dev/null || true
           
-          # Konfigurasi anykernel.sh untuk non-GKI MTK
+          # Konfigurasi anykernel.sh untuk MTK 4.19
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's|block=/dev/block/tdrex; |block=/dev/block/platform/bootdevice/by-name/boot; |g' AnyKernel3/anykernel.sh
           
           cd AnyKernel3
-          zip -r9 ../GusKernel-k65v1-KSU.zip *
+          zip -r9 ../GusKernel-ReSukiSU-k65v1.zip *
 
       - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: GusKernel-Final-Package
-          path: GusKernel-k65v1-KSU.zip
+          name: GusKernel-Package
+          path: GusKernel-ReSukiSU-k65v1.zip
